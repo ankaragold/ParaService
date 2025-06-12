@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Banknote Classifier</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; }
+        video, canvas, img { max-width: 300px; }
+        #result { margin-top: 20px; font-size: 20px; }
+        button, input { margin: 10px; padding: 10px; font-size: 16px; }
+    </style>
+</head>
+<body>
+    <h1>Banknote Classifier</h1>
+    <video id="video" autoplay playsinline></video>
+    <br>
+    <button onclick="capture()">Take Photo</button>
+    <br>
+    <input type="file" id="fileInput" accept="image/jpeg" onchange="predict()">
+    <br>
+    <canvas id="canvas" style="display:none;"></canvas>
+    <img id="preview" src="">
+    <div id="result"></div>
+
+    <script>
+        // دسترسی به دوربین
+        navigator.mediaDevices.getUserMedia({
+            video: { 
+                facingMode: 'environment',
+                width: { ideal: 400 },
+                height: { ideal: 224 }
+            }
+        })
+            .then(stream => {
+                const video = document.getElementById('video');
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    console.log(`Camera resolution: ${video.videoWidth}x${video.videoHeight}`);
+                };
+                console.log('Camera accessed successfully');
+            })
+            .catch(err => {
+                console.error('Camera error:', err);
+            });
+
+        async function capture() {
+            const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = 200;
+            canvas.height = 112;
+            ctx.drawImage(video, 0, 0, 200, 112);
+            const resultDiv = document.getElementById('result');
+
+            document.getElementById('preview').src = canvas.toDataURL('image/jpeg');
+            console.log('Image captured at 200x112, sending to server...');
+
+			try {
+				// تبدیل canvas به blob
+				const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+				if (!blob) {
+					resultDiv.textContent = 'Failed to create image file!';
+					return;
+				}
+
+				// ایجاد یک فایل از blob
+				const file = new File([blob], 'banknote.jpg', { type: 'image/jpeg' });
+		
+				// آماده‌سازی FormData برای آپلود
+				const formData = new FormData();
+				formData.append('image', file);
+		
+				// ارسال به سرور
+				const response = await fetch('http://localhost:3000/predict2', {
+					method: 'POST',
+					body: formData
+				});
+
+				if (!response.ok) {
+					throw new Error(`Server responded with status ${response.status}`);
+				}
+		
+				const data = await response.json();
+				resultDiv.textContent = `Prediction: ${data.prediction}`;
+			} catch (error) {
+				resultDiv.textContent = 'Error capturing or uploading image!';
+			}        
+		}
+
+        async function predict() {
+            const fileInput = document.getElementById('fileInput');
+            const resultDiv = document.getElementById('result');
+            if (!fileInput.files[0]) {
+                resultDiv.textContent = 'Please select an image!';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('image', fileInput.files[0]);
+
+            try {
+                const response = await fetch('http://localhost:3000/predict2', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                resultDiv.textContent = `Prediction: ${data.prediction}`;
+            } catch (error) {
+                resultDiv.textContent = 'Error predicting image!';
+            }
+        }
+
+
+        async function uploadFile() {
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+            if (!file) {
+                console.error('No file selected');
+                return;
+            }
+
+            const img = new Image();
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            img.onload = () => {
+                canvas.width = 200;
+                canvas.height = 112;
+                ctx.drawImage(img, 0, 0, 200, 112);
+                document.getElementById('preview').src = canvas.toDataURL('image/jpeg');
+                console.log('File resized to 200x112, sending to server...');
+
+                canvas.toBlob(async blob => {
+                    const formData = new FormData();
+                    formData.append('image', blob, 'uploaded.jpg');
+                    await sendToServer(formData);
+                }, 'image/jpeg');
+            };
+            img.src = URL.createObjectURL(file);
+        }
+
+        async function sendToServer(formData) {
+            try {
+                const response = await fetch('http://localhost:3000/predict2', {
+                    method: 'POST',
+                    body: formData
+                });
+                console.log('Server response status:', response.status);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(`HTTP error! status: ${response.status}, detail: ${JSON.stringify(errorData)}`);
+                }
+                const result = await response.json();
+                document.getElementById('result').innerText = `This banknote is: ${result.prediction}`;
+            } catch (error) {
+                document.getElementById('result').innerText = 'Error: Could not connect to server';
+                console.error('Fetch error:', error);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Banknote Predictor</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin: 50px; }
+        input, button { margin: 10px; padding: 10px; }
+        #result { margin-top: 20px; font-weight: bold; }
+        video, canvas { display: none; max-width: 100%; }
+    </style>
+</head>
+<body>
+    <h1>Upload or Capture Banknote Image</h1>
+    <input type="file" id="imageInput" accept=".jpg,.jpeg">
+    <button onclick="predict()">Predict from File</button>
+    <button onclick="startCamera()">Open Camera</button>
+    <button onclick="captureImage()">Capture & Predict</button>
+    <video id="video" autoplay></video>
+    <canvas id="canvas"></canvas>
+    <div id="result"></div>
+
+    <script>
+        async function predict() {
+            const fileInput = document.getElementById('imageInput');
+            const resultDiv = document.getElementById('result');
+            if (!fileInput.files[0]) {
+                resultDiv.textContent = 'Please select an image!';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('image', fileInput.files[0]);
+
+            try {
+                const response = await fetch('http://localhost:3000/predict2', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                resultDiv.textContent = `Prediction: ${data.prediction}`;
+            } catch (error) {
+                resultDiv.textContent = 'Error predicting image!';
+            }
+        }
+
+        let stream = null;
+
+        async function startCamera() {
+            const video = document.getElementById('video');
+            const captureButton = document.querySelector('button[onclick="captureImage()"]');
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+                video.style.display = 'block';
+                captureButton.style.display = 'inline-block';
+            } catch (error) {
+                document.getElementById('result').textContent = 'Error accessing camera!';
+            }
+        }
+
+        async function captureImage() {
+            const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
+            const resultDiv = document.getElementById('result');
+
+            // تنظیم ابعاد canvas به 400x224
+            canvas.width = 400;
+            canvas.height = 224;
+
+            // کشیدن تصویر ویدیو روی canvas با ابعاد 400x224
+            canvas.getContext('2d').drawImage(video, 0, 0, 400, 224);
+
+            try {
+                const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg'));
+                const formData = new FormData();
+                formData.append('image', blob, 'captured.jpg');
+
+                const response = await fetch('http://localhost:3000/predict2', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                resultDiv.textContent = `Prediction: ${data.prediction}`;
+            } catch (error) {
+                resultDiv.textContent = 'Error predicting image!';
+            }
+
+            // بستن دوربین
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                video.style.display = 'none';
+                document.querySelector('button[onclick="captureImage()"]').style.display = 'none';
+                stream = null;
+            }
+        }
+    </script>
+</body>
+</html>
