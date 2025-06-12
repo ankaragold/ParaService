@@ -183,6 +183,10 @@ async def predict_image(image: UploadFile = File(...)):
         logger.error(f"Error processing image: {str(e)}")
         raise HTTPException(status_code=422, detail=f"Error processing image: {str(e)}")        
 
+@app.get("/")
+async def serve_index():
+    return FileResponse("index.html")
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3000)
+    uvicorn.run(app, host="0.0.0.0", port=80)
