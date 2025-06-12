@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Banknote Classifier</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; }
+        video, canvas, img { max-width: 300px; }
+        #result { margin-top: 20px; font-size: 20px; }
+        button { margin: 10px; padding: 10px; font-size: 16px; }
+    </style>
+</head>
+<body>
+    <h1>Banknote Classifier</h1>
+    <video id="video" autoplay playsinline></video>
+    <br>
+    <button onclick="capture()">Take Photo</button>
+    <br>
+    <canvas id="canvas" style="display:none;"></canvas>
+    <img id="preview" src="">
+    <div id="result"></div>
+
+    <script>
+        // دسترسی به دوربین
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+            .then(stream => {
+                document.getElementById('video').srcObject = stream;
+            })
+            .catch(err => {
+                alert('Error accessing camera: ' + err);
+            });
+
+        function capture() {
+            const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // نمایش پیش‌نمایش
+            document.getElementById('preview').src = canvas.toDataURL('image/jpeg');
+
+            // ارسال به سرور
+            canvas.toBlob(async blob => {
+                const formData = new FormData();
+                formData.append('image', blob, 'banknote.jpg');
+                try {
+                    const response = await fetch('http://localhost:8000/predict', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const result = await response.json();
+                    document.getElementById('result').innerText = `This banknote is: ${result.prediction}`;
+                } catch (error) {
+                    document.getElementById('result').innerText = 'Error: Could not connect to server';
+                }
+            }, 'image/jpeg');
+        }
+    </script>
+</body>
+</html>
