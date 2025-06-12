@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>M.Bon: Banknote Classifier</title>
+    <title>Banknote Classifier</title>
     <style>
         body { font-family: Arial, sans-serif; text-align: center; margin: 20px; }
         video, img { max-width: 100%; }
@@ -16,7 +16,7 @@
     </style>
 </head>
 <body>
-    <h1>Mohammad Bon<br>Banknote Classifier</h1>
+    <h1>Banknote Classifier</h1>
     <div id="video-container">
         <video id="video" autoplay playsinline></video>
         <canvas id="overlay"></canvas>
@@ -31,38 +31,59 @@
     <div id="result"></div>
 
     <script>
+        let stream = null;
+
         // دسترسی به دوربین با فوکوس خودکار
-        navigator.mediaDevices.getUserMedia({
-            video: {
-                facingMode: 'environment',
-                width: { ideal: 400 },
-                height: { ideal: 224 },
-                advanced: [{ focusMode: 'continuous' }] // فوکوس خودکار
+        async function startCamera(focusPoint = null) {
+            const video = document.getElementById('video');
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
             }
-        })
-            .then(stream => {
-                const video = document.getElementById('video');
+
+            try {
+                const constraints = {
+                    video: {
+                        facingMode: 'environment',
+                        width: { ideal: 400 },
+                        height: { ideal: 224 },
+                        advanced: [{ focusMode: 'continuous' }]
+                    }
+                };
+
+                // تنظیم فوکوس روی نقطه خاص (اگه مشخص شده باشه)
+                if (focusPoint) {
+                    constraints.video.advanced.push({
+                        focusMode: 'manual',
+                        focusDistance: { ideal: calculateFocusDistance(focusPoint) }
+                    });
+                }
+
+                stream = await navigator.mediaDevices.getUserMedia(constraints);
                 video.srcObject = stream;
                 video.onloadedmetadata = () => {
-                    // تنظیم canvas overlay برای مستطیل راهنما
                     const overlay = document.getElementById('overlay');
                     overlay.width = video.videoWidth;
                     overlay.height = video.videoHeight;
                     drawGuideRectangle();
                 };
-            })
-            .catch(err => {
+            } catch (err) {
                 document.getElementById('result').textContent = 'Camera error: ' + err.message;
-            });
+            }
+        }
 
-        // رسم مستطیل راهنما با نسبت 25:14 (200x112)
+        // محاسبه فاصله فوکوس (تقریبی)
+        function calculateFocusDistance(point) {
+            // این فقط یه تخمینه، چون API دقیق فوکوس دستی رو پشتیبانی نمی‌کنه
+            return 0.5; // مقدار پیش‌فرض برای فوکوس
+        }
+
+        // رسم مستطیل راهنما با نسبت 25:14
         function drawGuideRectangle() {
             const overlay = document.getElementById('overlay');
             const ctx = overlay.getContext('2d');
             const videoWidth = overlay.width;
             const videoHeight = overlay.height;
 
-            // محاسبه ابعاد مستطیل با نسبت 25:14 در مرکز ویدیو
             const rectWidth = Math.min(videoWidth * 0.8, videoHeight * (25 / 14) * 0.8);
             const rectHeight = rectWidth * (14 / 25);
             const rectX = (videoWidth - rectWidth) / 2;
@@ -73,9 +94,18 @@
             ctx.lineWidth = 2;
             ctx.strokeRect(rectX, rectY, rectWidth, rectHeight);
 
-            // ذخیره مختصات برای crop
             window.guideRect = { x: rectX, y: rectY, width: rectWidth, height: rectHeight };
         }
+
+        // هندل کردن تپ روی ویدیو برای فوکوس
+        document.getElementById('video').addEventListener('click', (event) => {
+            const video = document.getElementById('video');
+            const rect = video.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+            startCamera({ x, y }); // بازخوانی استریم با فوکوس روی نقطه تپ‌شده
+            document.getElementById('result').textContent = 'Attempting to focus...';
+        });
 
         async function capture() {
             const video = document.getElementById('video');
@@ -83,12 +113,10 @@
             const ctx = canvas.getContext('2d');
             const resultDiv = document.getElementById('result');
 
-            // تنظیم canvas به ابعاد ویدیوی اصلی برای گرفتن تصویر کامل
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             ctx.drawImage(video, 0, 0);
 
-            // Crop کردن تصویر از ناحیه مستطیل راهنما
             const { x, y, width, height } = window.guideRect;
             const cropCanvas = document.createElement('canvas');
             cropCanvas.width = 200;
@@ -96,11 +124,9 @@
             const cropCtx = cropCanvas.getContext('2d');
             cropCtx.drawImage(canvas, x, y, width, height, 0, 0, 200, 112);
 
-            // نمایش پیش‌نمایش
             document.getElementById('preview').src = cropCanvas.toDataURL('image/jpeg');
 
             try {
-                // تبدیل به فایل JPG
                 const blob = await new Promise(resolve => cropCanvas.toBlob(resolve, 'image/jpeg', 0.9));
                 if (!blob) {
                     resultDiv.textContent = 'Failed to create image file!';
@@ -111,7 +137,6 @@
                 const formData = new FormData();
                 formData.append('image', file);
 
-                // ارسال به سرور
                 const response = await fetch('https://paraservice.onrender.com/predict2', {
                     method: 'POST',
                     body: formData
@@ -150,6 +175,9 @@
                 resultDiv.textContent = 'Error predicting image!';
             }
         }
+
+        // شروع دوربین در بارگذاری صفحه
+        startCamera();
     </script>
 </body>
 </html>
