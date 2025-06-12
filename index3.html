@@ -3,27 +3,133 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Banknote Predictor</title>
+    <title>M.Bon: Banknote Classifier</title>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; margin: 50px; }
-        input, button { margin: 10px; padding: 10px; }
-        #result { margin-top: 20px; font-weight: bold; }
-        video, canvas { display: none; max-width: 100%; }
+        body { font-family: Arial, sans-serif; text-align: center; margin: 20px; }
+        video, img { max-width: 100%; }
+        #video-container { position: relative; display: inline-block; }
+        #video { display: block; }
+        #overlay { position: absolute; top: 0; left: 0; pointer-events: none; }
+        #result { margin-top: 20px; font-size: 20px; }
+        button, input { margin: 10px; padding: 10px; font-size: 16px; }
+        #canvas { display: none; }
     </style>
 </head>
 <body>
-    <h1>Upload or Capture Banknote Image</h1>
-    <input type="file" id="imageInput" accept=".jpg,.jpeg">
-    <button onclick="predict()">Predict from File</button>
-    <button onclick="startCamera()">Open Camera</button>
-    <button onclick="captureImage()">Capture & Predict</button>
-    <video id="video" autoplay></video>
-    <canvas id="canvas"></canvas>
+    <h1>Mohammad Bon<br>Banknote Classifier</h1>
+    <div id="video-container">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="overlay"></canvas>
+    </div>
+    <br>
+    <button onclick="capture()">Take Photo</button>
+    <br>
+    <input type="file" id="fileInput" accept="image/jpeg" onchange="predict()">
+    <br>
+    <canvas id="canvas" style="display:none;"></canvas>
+    <img id="preview" src="">
     <div id="result"></div>
 
     <script>
+        // دسترسی به دوربین با فوکوس خودکار
+        navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: 'environment',
+                width: { ideal: 400 },
+                height: { ideal: 224 },
+                advanced: [{ focusMode: 'continuous' }] // فوکوس خودکار
+            }
+        })
+            .then(stream => {
+                const video = document.getElementById('video');
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    // تنظیم canvas overlay برای مستطیل راهنما
+                    const overlay = document.getElementById('overlay');
+                    overlay.width = video.videoWidth;
+                    overlay.height = video.videoHeight;
+                    drawGuideRectangle();
+                };
+            })
+            .catch(err => {
+                document.getElementById('result').textContent = 'Camera error: ' + err.message;
+            });
+
+        // رسم مستطیل راهنما با نسبت 25:14 (200x112)
+        function drawGuideRectangle() {
+            const overlay = document.getElementById('overlay');
+            const ctx = overlay.getContext('2d');
+            const videoWidth = overlay.width;
+            const videoHeight = overlay.height;
+
+            // محاسبه ابعاد مستطیل با نسبت 25:14 در مرکز ویدیو
+            const rectWidth = Math.min(videoWidth * 0.8, videoHeight * (25 / 14) * 0.8);
+            const rectHeight = rectWidth * (14 / 25);
+            const rectX = (videoWidth - rectWidth) / 2;
+            const rectY = (videoHeight - rectHeight) / 2;
+
+            ctx.clearRect(0, 0, videoWidth, videoHeight);
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(rectX, rectY, rectWidth, rectHeight);
+
+            // ذخیره مختصات برای crop
+            window.guideRect = { x: rectX, y: rectY, width: rectWidth, height: rectHeight };
+        }
+
+        async function capture() {
+            const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            const resultDiv = document.getElementById('result');
+
+            // تنظیم canvas به ابعاد ویدیوی اصلی برای گرفتن تصویر کامل
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0);
+
+            // Crop کردن تصویر از ناحیه مستطیل راهنما
+            const { x, y, width, height } = window.guideRect;
+            const cropCanvas = document.createElement('canvas');
+            cropCanvas.width = 200;
+            cropCanvas.height = 112;
+            const cropCtx = cropCanvas.getContext('2d');
+            cropCtx.drawImage(canvas, x, y, width, height, 0, 0, 200, 112);
+
+            // نمایش پیش‌نمایش
+            document.getElementById('preview').src = cropCanvas.toDataURL('image/jpeg');
+
+            try {
+                // تبدیل به فایل JPG
+                const blob = await new Promise(resolve => cropCanvas.toBlob(resolve, 'image/jpeg', 0.9));
+                if (!blob) {
+                    resultDiv.textContent = 'Failed to create image file!';
+                    return;
+                }
+
+                const file = new File([blob], 'banknote.jpg', { type: 'image/jpeg' });
+                const formData = new FormData();
+                formData.append('image', file);
+
+                // ارسال به سرور
+                const response = await fetch('http://localhost:3000/predict2', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server responded with status ${response.status}`);
+                }
+
+                const data = await response.json();
+                resultDiv.textContent = `Prediction: ${data.prediction}`;
+            } catch (error) {
+                resultDiv.textContent = 'Error capturing or uploading image!';
+            }
+        }
+
         async function predict() {
-            const fileInput = document.getElementById('imageInput');
+            const fileInput = document.getElementById('fileInput');
             const resultDiv = document.getElementById('result');
             if (!fileInput.files[0]) {
                 resultDiv.textContent = 'Please select an image!';
@@ -42,57 +148,6 @@
                 resultDiv.textContent = `Prediction: ${data.prediction}`;
             } catch (error) {
                 resultDiv.textContent = 'Error predicting image!';
-            }
-        }
-
-        let stream = null;
-
-        async function startCamera() {
-            const video = document.getElementById('video');
-            const captureButton = document.querySelector('button[onclick="captureImage()"]');
-            try {
-                stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                video.srcObject = stream;
-                video.style.display = 'block';
-                captureButton.style.display = 'inline-block';
-            } catch (error) {
-                document.getElementById('result').textContent = 'Error accessing camera!';
-            }
-        }
-
-        async function captureImage() {
-            const video = document.getElementById('video');
-            const canvas = document.getElementById('canvas');
-            const resultDiv = document.getElementById('result');
-
-            // تنظیم ابعاد canvas به 400x224
-            canvas.width = 400;
-            canvas.height = 224;
-
-            // کشیدن تصویر ویدیو روی canvas با ابعاد 400x224
-            canvas.getContext('2d').drawImage(video, 0, 0, 400, 224);
-
-            try {
-                const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg'));
-                const formData = new FormData();
-                formData.append('image', blob, 'captured.jpg');
-
-                const response = await fetch('http://localhost:3000/predict2', {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await response.json();
-                resultDiv.textContent = `Prediction: ${data.prediction}`;
-            } catch (error) {
-                resultDiv.textContent = 'Error predicting image!';
-            }
-
-            // بستن دوربین
-            if (stream) {
-                stream.getTracks().forEach(track => track.stop());
-                video.style.display = 'none';
-                document.querySelector('button[onclick="captureImage()"]').style.display = 'none';
-                stream = null;
             }
         }
     </script>
