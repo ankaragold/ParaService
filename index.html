@@ -6,127 +6,250 @@
     <title>M.Bon: Banknote Classifier</title>
     <style>
         body { font-family: Arial, sans-serif; text-align: center; margin: 20px; }
-        video, img { max-width: 100%; }
-        #video-container { position: relative; display: inline-block; }
-        #video { display: block; }
-        #overlay { position: absolute; top: 0; left: 0; pointer-events: none; }
+        #image-container { position: relative; display: inline-block; overflow: hidden; }
+        #image-canvas { display: block; max-width: 100%; }
+        #overlay { position: absolute; top: 0; left: 0; pointer-events: auto; cursor: move; }
         #result { margin-top: 20px; font-size: 20px; }
         button, input { margin: 10px; padding: 10px; font-size: 16px; }
-        #canvas { display: none; }
+        #preview, #crop-canvas { display: none; }
+        #crop-button, #zoom-in, #zoom-out { display: none; }
     </style>
 </head>
 <body>
     <h1>Mohammad Bon<br>Banknote Classifier</h1>
-    <div id="video-container">
-        <video id="video" autoplay playsinline></video>
+    <input type="file" id="fileInput" accept="image/jpeg" onchange="loadImage()">
+    <br>
+    <div id="image-container">
+        <canvas id="image-canvas"></canvas>
         <canvas id="overlay"></canvas>
     </div>
     <br>
-    <button onclick="capture()">Take Photo</button>
+    <button id="zoom-in" onclick="zoom(1.2)">Zoom In</button>
+    <button id="zoom-out" onclick="zoom(0.8)">Zoom Out</button>
+    <button id="crop-button" onclick="cropAndSend()">Crop & Predict</button>
     <br>
-    <input type="file" id="fileInput" accept="image/jpeg" onchange="predict()">
-    <br>
-    <canvas id="canvas" style="display:none;"></canvas>
     <img id="preview" src="">
     <div id="result"></div>
+    <canvas id="crop-canvas"></canvas>
 
     <script>
-        let stream = null;
+        let cropRect = null;
+        let isDragging = false;
+        let dragStartX, dragStartY, rectStartX, rectStartY;
+        let scale = 1;
+        let offsetX = 0;
+        let offsetY = 0;
+        let imageWidth, imageHeight;
+        let loadedImage = null;
 
-        // دسترسی به دوربین با فوکوس خودکار
-        async function startCamera(focusPoint = null) {
-            const video = document.getElementById('video');
-            if (stream) {
-                stream.getTracks().forEach(track => track.stop());
+        // بارگذاری تصویر آپلودشده
+        function loadImage() {
+            const fileInput = document.getElementById('fileInput');
+            const imageCanvas = document.getElementById('image-canvas');
+            const overlay = document.getElementById('overlay');
+            const resultDiv = document.getElementById('result');
+            const cropButton = document.getElementById('crop-button');
+            const zoomIn = document.getElementById('zoom-in');
+            const zoomOut = document.getElementById('zoom-out');
+
+            if (!fileInput.files[0]) {
+                resultDiv.textContent = 'Please select an image!';
+                return;
             }
 
-            try {
-                const constraints = {
-                    video: {
-                        facingMode: 'environment',
-                        width: { ideal: 400 },
-                        height: { ideal: 224 },
-                        advanced: [{ focusMode: 'continuous' }]
-                    }
-                };
+            loadedImage = new Image();
+            loadedImage.onload = () => {
+                imageWidth = loadedImage.width;
+                imageHeight = loadedImage.height;
+                imageCanvas.width = imageWidth;
+                imageCanvas.height = imageHeight;
 
-                // تنظیم فوکوس روی نقطه خاص (اگه مشخص شده باشه)
-                if (focusPoint) {
-                    constraints.video.advanced.push({
-                        focusMode: 'manual',
-                        focusDistance: { ideal: calculateFocusDistance(focusPoint) }
-                    });
-                }
+                // تنظیم overlay
+                overlay.width = imageWidth;
+                overlay.height = imageHeight;
 
-                stream = await navigator.mediaDevices.getUserMedia(constraints);
-                video.srcObject = stream;
-                video.onloadedmetadata = () => {
-                    const overlay = document.getElementById('overlay');
-                    overlay.width = video.videoWidth;
-                    overlay.height = video.videoHeight;
-                    drawGuideRectangle();
-                };
-            } catch (err) {
-                document.getElementById('result').textContent = 'Camera error: ' + err.message;
+                // محاسبه مستطیل کراپ
+                const rectWidth = Math.min(imageWidth * 0.6, imageHeight * (25 / 14) * 0.6);
+                const rectHeight = rectWidth * (14 / 25);
+                const rectX = (imageWidth - rectWidth) / 2;
+                const rectY = (imageHeight - rectHeight) / 2;
+
+                cropRect = { x: rectX, y: rectY, width: rectWidth, height: rectHeight };
+
+                // رندر اولیه
+                drawImage();
+                drawCropRectangle();
+
+                // نمایش دکمه‌ها
+                cropButton.style.display = 'inline-block';
+                zoomIn.style.display = 'inline-block';
+                zoomOut.style.display = 'inline-block';
+                imageCanvas.style.display = 'block';
+            };
+            loadedImage.src = URL.createObjectURL(fileInput.files[0]);
+        }
+
+        // رسم تصویر با زوم و آفست
+        function drawImage() {
+            const imageCanvas = document.getElementById('image-canvas');
+            const ctx = imageCanvas.getContext('2d');
+            ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+            ctx.save();
+            ctx.translate(offsetX, offsetY);
+            ctx.scale(scale, scale);
+            if (loadedImage) {
+                ctx.drawImage(loadedImage, 0, 0);
             }
+            ctx.restore();
         }
 
-        // محاسبه فاصله فوکوس (تقریبی)
-        function calculateFocusDistance(point) {
-            // این فقط یه تخمینه، چون API دقیق فوکوس دستی رو پشتیبانی نمی‌کنه
-            return 0.5; // مقدار پیش‌فرض برای فوکوس
-        }
-
-        // رسم مستطیل راهنما با نسبت 25:14
-        function drawGuideRectangle() {
+        // رسم مستطیل کراپ
+        function drawCropRectangle() {
             const overlay = document.getElementById('overlay');
             const ctx = overlay.getContext('2d');
-            const videoWidth = overlay.width;
-            const videoHeight = overlay.height;
+            ctx.clearRect(0, 0, overlay.width, overlay.height);
 
-            const rectWidth = Math.min(videoWidth * 0.8, videoHeight * (25 / 14) * 0.8);
-            const rectHeight = rectWidth * (14 / 25);
-            const rectX = (videoWidth - rectWidth) / 2;
-            const rectY = (videoHeight - rectHeight) / 2;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.fillRect(0, 0, overlay.width, overlay.height);
+            ctx.clearRect(cropRect.x, cropRect.y, cropRect.width, cropRect.height);
 
-            ctx.clearRect(0, 0, videoWidth, videoHeight);
             ctx.strokeStyle = 'red';
             ctx.lineWidth = 2;
-            ctx.strokeRect(rectX, rectY, rectWidth, rectHeight);
-
-            window.guideRect = { x: rectX, y: rectY, width: rectWidth, height: rectHeight };
+            ctx.strokeRect(cropRect.x, cropRect.y, cropRect.width, cropRect.height);
         }
 
-        // هندل کردن تپ روی ویدیو برای فوکوس
-        document.getElementById('video').addEventListener('click', (event) => {
-            const video = document.getElementById('video');
-            const rect = video.getBoundingClientRect();
-            const x = event.clientX - rect.left;
-            const y = event.clientY - rect.top;
-            startCamera({ x, y }); // بازخوانی استریم با فوکوس روی نقطه تپ‌شده
-            document.getElementById('result').textContent = 'Attempting to focus...';
+        // زوم کردن
+        function zoom(factor) {
+            const oldScale = scale;
+            scale *= factor;
+            scale = Math.max(0.5, Math.min(scale, 5));
+
+            const container = document.getElementById('image-container').getBoundingClientRect();
+            offsetX = (offsetX - container.width / 2) * (scale / oldScale) + container.width / 2;
+            offsetY = (offsetY - container.height / 2) * (scale / oldScale) + container.height / 2;
+
+            offsetX = Math.min(0, Math.max(offsetX, container.width - imageWidth * scale));
+            offsetY = Math.min(0, Math.max(offsetY, container.height - imageHeight * scale));
+
+            drawImage();
+            drawCropRectangle();
+        }
+
+        // هندل کردن اسکرول برای زوم
+        document.getElementById('image-container').addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const factor = e.deltaY < 0 ? 1.1 : 0.9;
+            zoom(factor);
         });
 
-        async function capture() {
-            const video = document.getElementById('video');
-            const canvas = document.getElementById('canvas');
-            const ctx = canvas.getContext('2d');
+        // هندل کردن pinch-to-zoom
+        let lastDistance = null;
+        document.getElementById('image-container').addEventListener('touchmove', (e) => {
+            if (e.touches.length === 2) {
+                e.preventDefault();
+                const touch1 = e.touches[0];
+                const touch2 = e.touches[1];
+                const distance = Math.hypot(touch1.clientX - touch2.clientX, touch1.clientY - touch2.clientY);
+                if (lastDistance) {
+                    const factor = distance / lastDistance;
+                    zoom(factor);
+                }
+                lastDistance = distance;
+            }
+        });
+        document.getElementById('image-container').addEventListener('touchend', () => {
+            lastDistance = null;
+        });
+
+        // هندل کردن drag برای جابه‌جایی مستطیل
+        const overlay = document.getElementById('overlay');
+        overlay.addEventListener('mousedown', startDragging);
+        overlay.addEventListener('mousemove', drag);
+        overlay.addEventListener('mouseup', stopDragging);
+        overlay.addEventListener('touchstart', handleTouchStart);
+        overlay.addEventListener('touchmove', handleTouchMove);
+        overlay.addEventListener('touchend', stopDragging);
+
+        function startDragging(e) {
+            e.preventDefault();
+            const rect = overlay.getBoundingClientRect();
+            dragStartX = e.clientX - rect.left;
+            dragStartY = e.clientY - rect.top;
+            rectStartX = cropRect.x;
+            rectStartY = cropRect.y;
+            isDragging = true;
+        }
+
+        function drag(e) {
+            if (!isDragging) return;
+            e.preventDefault();
+            const rect = overlay.getBoundingClientRect();
+            const currentX = e.clientX - rect.left;
+            const currentY = e.clientY - rect.top;
+
+            const dx = currentX - dragStartX;
+            const dy = currentY - dragStartY;
+
+            cropRect.x = Math.max(0, Math.min(rectStartX + dx, overlay.width - cropRect.width));
+            cropRect.y = Math.max(0, Math.min(rectStartY + dy, overlay.height - cropRect.height));
+            drawCropRectangle();
+        }
+
+        function stopDragging() {
+            isDragging = false;
+        }
+
+        function handleTouchStart(e) {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const rect = overlay.getBoundingClientRect();
+            dragStartX = touch.clientX - rect.left;
+            dragStartY = touch.clientY - rect.top;
+            rectStartX = cropRect.x;
+            rectStartY = cropRect.y;
+            isDragging = true;
+        }
+
+        function handleTouchMove(e) {
+            if (e.touches.length === 1 && isDragging) {
+                e.preventDefault();
+                const touch = e.touches[0];
+                const rect = overlay.getBoundingClientRect();
+                const currentX = touch.clientX - rect.left;
+                const currentY = touch.clientY - rect.top;
+
+                const dx = currentX - dragStartX;
+                const dy = currentY - dragStartY;
+
+                cropRect.x = Math.max(0, Math.min(rectStartX + dx, overlay.width - cropRect.width));
+                cropRect.y = Math.max(0, Math.min(rectStartY + dy, overlay.height - cropRect.height));
+                drawCropRectangle();
+            }
+        }
+
+        async function cropAndSend() {
+            const cropCanvas = document.getElementById('crop-canvas');
             const resultDiv = document.getElementById('result');
 
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            ctx.drawImage(video, 0, 0);
-
-            const { x, y, width, height } = window.guideRect;
-            const cropCanvas = document.createElement('canvas');
+            // تنظیم canvas برای کراپ
             cropCanvas.width = 200;
             cropCanvas.height = 112;
-            const cropCtx = cropCanvas.getContext('2d');
-            cropCtx.drawImage(canvas, x, y, width, height, 0, 0, 200, 112);
+            const ctx = cropCanvas.getContext('2d');
 
+            // محاسبه مختصات با توجه به زوم و آفست
+            const sourceX = (cropRect.x - offsetX) / scale;
+            const sourceY = (cropRect.y - offsetY) / scale;
+            const sourceWidth = cropRect.width / scale;
+            const sourceHeight = cropRect.height / scale;
+
+            ctx.drawImage(loadedImage, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, 200, 112);
+
+            // نمایش پیش‌نمایش
             document.getElementById('preview').src = cropCanvas.toDataURL('image/jpeg');
+            document.getElementById('preview').style.display = 'block';
 
             try {
+                // تبدیل به فایل JPG
                 const blob = await new Promise(resolve => cropCanvas.toBlob(resolve, 'image/jpeg', 0.9));
                 if (!blob) {
                     resultDiv.textContent = 'Failed to create image file!';
@@ -137,6 +260,7 @@
                 const formData = new FormData();
                 formData.append('image', file);
 
+                // ارسال به سرور
                 const response = await fetch('https://paraservice.onrender.com/predict2', {
                     method: 'POST',
                     body: formData
@@ -148,36 +272,16 @@
 
                 const data = await response.json();
                 resultDiv.textContent = `Prediction: ${data.prediction}`;
+
+                // مخفی کردن canvas و دکمه‌ها
+                document.getElementById('image-canvas').style.display = 'none';
+                document.getElementById('crop-button').style.display = 'none';
+                document.getElementById('zoom-in').style.display = 'none';
+                document.getElementById('zoom-out').style.display = 'none';
             } catch (error) {
-                resultDiv.textContent = 'Error capturing or uploading image!';
+                resultDiv.textContent = 'Error cropping or uploading image!';
             }
         }
-
-        async function predict() {
-            const fileInput = document.getElementById('fileInput');
-            const resultDiv = document.getElementById('result');
-            if (!fileInput.files[0]) {
-                resultDiv.textContent = 'Please select an image!';
-                return;
-            }
-
-            const formData = new FormData();
-            formData.append('image', fileInput.files[0]);
-
-            try {
-                const response = await fetch('https://paraservice.onrender.com/predict2', {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await response.json();
-                resultDiv.textContent = `Prediction: ${data.prediction}`;
-            } catch (error) {
-                resultDiv.textContent = 'Error predicting image!';
-            }
-        }
-
-        // شروع دوربین در بارگذاری صفحه
-        startCamera();
     </script>
 </body>
 </html>
